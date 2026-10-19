@@ -1,32 +1,15 @@
 """Patch dailycheckin bilibili for robustness.
 1. 修复 get_region 已废弃的分区视频接口，改用热门视频接口。
-2. 用健壮版本整体替换 main 方法，每个子任务独立容错，
-   避免风控/国外 IP 下某个 API 返回 data:null 导致整个签到失败。
+2. 用健壮版本整体替换 main 方法，每个子任务独立容错。
+3. 同时 patch site-packages 与仓库本地源码，
+   覆盖 dailycheckin 命令与本地模块两种加载方式。
 """
 import os
 import re
+import ast
 import base64
-import dailycheckin
+import sysconfig
 
-base = os.path.dirname(dailycheckin.__file__)
-path = os.path.join(base, "bilibili", "main.py")
-print("DIAG dailycheckin file:", dailycheckin.__file__)
-print("DIAG patch path:", path)
-
-with open(path, encoding="utf-8") as f:
-    c = f.read()
-
-# 1. 修复 get_region 废弃接口
-c = c.replace(
-    'url = "https://api.bilibili.com/x/web-interface/dynamic/region?ps=" + str(num) + "&rid=" + str(rid)',
-    'url = "https://api.bilibili.com/x/web-interface/popular?ps=" + str(num) + "&pn=1"',
-)
-c = c.replace(
-    'for one in ret.get("data", {}).get("archives", [])',
-    'for one in (ret.get("data") or {}).get("list", [])',
-)
-
-# 2. 用健壮版本替换整个 main 方法
 robust_b64 = (
     "ICAgIGRlZiBtYWluKHNlbGYpOgogICAgICAgIGJpbGliaWxpX2Nvb2tpZSA9IHsKICAgICAgICAg"
     "ICAgaXRlbS5zcGxpdCgiPSIpWzBdOiAoaXRlbS5zcGxpdCgiPSIpWzFdIGlmIGxlbihpdGVtLnNw"
@@ -158,32 +141,63 @@ robust_b64 = (
 )
 robust_main = base64.b64decode(robust_b64).decode("utf-8")
 
-pattern = re.compile(r"    def main\(self\):.*?(?=\nif __name__)", re.DOTALL)
-if pattern.search(c):
-    new_main = robust_main.rstrip("\n")
-    # 用 lambda 作为替换，避免 re.sub 对替换字符串中的反斜杠（如 \n）做转义
-    c = pattern.sub(lambda m: new_main, c)
-    print("Replaced main method")
-else:
-    print("main method pattern not found")
-
-# 诊断：校验语法 + 打印实际 main 方法
-import ast
-try:
-    ast.parse(c)
-    print("DIAG syntax OK")
-except Exception as e:
-    print("DIAG syntax ERROR:", e)
-m2 = re.compile(r"    def main\(self\):.*?(?=\nif __name__)", re.DOTALL)
-actual = m2.search(c)
-if actual:
-    seg = actual.group(0)
-    print("DIAG actual main lines:", seg.count("\n") + 1)
-    print("DIAG has live_sign:", "live_sign" in seg, "has get_region:", "get_region" in seg)
-    print("DIAG def count:", len(re.findall(r"def main", c)))
+MAIN_PATTERN = re.compile(r"    def main\(self\):.*?(?=\nif __name__)", re.DOTALL)
 
 
-with open(path, "w", encoding="utf-8") as f:
-    f.write(c)
+def find_targets():
+    targets = []
+    # 1. site-packages（dailycheckin 命令实际加载位置）
+    purelib = sysconfig.get_paths().get("purelib")
+    if purelib:
+        p = os.path.join(purelib, "dailycheckin", "bilibili", "main.py")
+        if os.path.exists(p):
+            targets.append(p)
+    # 2. 仓库本地源码（python patch.py 时 import 可能命中的位置）
+    local = os.path.join(os.getcwd(), "dailycheckin", "bilibili", "main.py")
+    if os.path.exists(local) and local not in targets:
+        targets.append(local)
+    return targets
 
-print("Patched bilibili main.py")
+
+def patch_one(path):
+    with open(path, encoding="utf-8") as f:
+        c = f.read()
+
+    # 修复 get_region 废弃接口
+    c = c.replace(
+        'url = "https://api.bilibili.com/x/web-interface/dynamic/region?ps=" + str(num) + "&rid=" + str(rid)',
+        'url = "https://api.bilibili.com/x/web-interface/popular?ps=" + str(num) + "&pn=1"',
+    )
+    c = c.replace(
+        'for one in ret.get("data", {}).get("archives", [])',
+        'for one in (ret.get("data") or {}).get("list", [])',
+    )
+
+    # 健壮版本替换 main
+    if MAIN_PATTERN.search(c):
+        new_main = robust_main.rstrip("\n")
+        c = MAIN_PATTERN.sub(lambda m: new_main, c)
+        replaced = True
+    else:
+        replaced = False
+
+    # 语法校验
+    try:
+        ast.parse(c)
+        syn = "OK"
+    except Exception as e:
+        syn = "ERR " + str(e)
+
+    with open(path, "w", encoding="utf-8") as f:
+        f.write(c)
+
+    print(f"Patched: {path}")
+    print(f"  replaced={replaced} syntax={syn}")
+
+
+targets = find_targets()
+print("DIAG targets:", len(targets))
+for t in targets:
+    print("DIAG target:", t)
+for t in targets:
+    patch_one(t)
