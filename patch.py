@@ -10,6 +10,8 @@ import dailycheckin
 
 base = os.path.dirname(dailycheckin.__file__)
 path = os.path.join(base, "bilibili", "main.py")
+print("DIAG dailycheckin file:", dailycheckin.__file__)
+print("DIAG patch path:", path)
 
 with open(path, encoding="utf-8") as f:
     c = f.read()
