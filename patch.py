@@ -165,6 +165,22 @@ if pattern.search(c):
 else:
     print("main method pattern not found")
 
+# 诊断：校验语法 + 打印实际 main 方法
+import ast
+try:
+    ast.parse(c)
+    print("DIAG syntax OK")
+except Exception as e:
+    print("DIAG syntax ERROR:", e)
+m2 = re.compile(r"    def main\(self\):.*?(?=\nif __name__)", re.DOTALL)
+actual = m2.search(c)
+if actual:
+    seg = actual.group(0)
+    print("DIAG actual main lines:", seg.count("\n") + 1)
+    print("DIAG has live_sign:", "live_sign" in seg, "has get_region:", "get_region" in seg)
+    print("DIAG def count:", len(re.findall(r"def main", c)))
+
+
 with open(path, "w", encoding="utf-8") as f:
     f.write(c)
 
