@@ -14,6 +14,8 @@ jobs:
         with:
           python-version: '3.11'
       - run: pip install dailycheckin
+      - name: Patch scripts
+        run: python patch.py
       - name: Generate config.json
         env:
           CONFIG_JSON: ${{ secrets.CONFIG_JSON }}
